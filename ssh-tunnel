@@ -1,0 +1,148 @@
+#!/bin/bash
+
+source conf
+echo "set the apt proxy:"
+echo "======================================================"
+echo "echo '"
+echo "Acquire::http::proxy \"http://$BASIC_PROXY/\";
+Acquire::https::proxy \"https://$BASIC_PROXY/\";
+Acquire::ftp::proxy \"ftp://$BASIC_PROXY/\";"
+echo "' >> /etc/apt/apt.conf"
+
+echo "
+======================================================
+"
+
+IPSOCKS='
+iptables -t nat -A POSTROUTING -s 172.18.0.0/16 ! -o docker0 -j MASQUERADE
+iptables -t nat -N REDSOCKS || true
+iptables -t nat -F REDSOCKS
+iptables -t nat -A REDSOCKS -d 0.0.0.0/8 -j RETURN
+iptables -t nat -A REDSOCKS -d 10.0.0.0/8 -j RETURN
+iptables -t nat -A REDSOCKS -d 127.0.0.0/8 -j RETURN
+iptables -t nat -A REDSOCKS -d 169.254.0.0/16 -j RETURN
+iptables -t nat -A REDSOCKS -d 172.16.0.0/12 -j RETURN
+iptables -t nat -A REDSOCKS -d 192.168.0.0/16 -j RETURN
+
+iptables -t nat -A REDSOCKS -p tcp -m tcp --dport 6667 -j DNAT --to-destination 127.0.0.1:7777
+iptables -t nat -A REDSOCKS -p udp -m udp --dport 6667 -j DNAT --to-destination 127.0.0.1:9999
+iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 6666
+iptables -t nat -A REDSOCKS -p udp -j REDIRECT --to-ports 8888
+iptables -t nat -A OUTPUT -p tcp  -j REDSOCKS
+iptables -t nat -A PREROUTING -p tcp -j REDSOCKS'
+
+
+SOCKS_CONF="
+redsocks {
+        local_ip = 127.0.0.1;
+        local_port = 7777;
+
+        ip = $INTERNAL_PROXY_IP;
+        port = 1080;
+        type = socks5;
+}
+
+redudp {
+        local_ip = 127.0.0.1;
+        local_port = 9999;
+        ip = $INTERNAL_PROXY_IP;
+        port = 1080;
+}
+
+redsocks {
+        local_ip = 127.0.0.1;
+        local_port = 6666;
+
+        ip = 127.0.0.1;
+        port = 10800;
+        // ip = $INTERNAL_PROXY_IP;
+        // port = 1080;
+        type = socks5;
+}
+
+redudp {
+        local_ip = 127.0.0.1;
+        local_port = 8888;
+        ip = 127.0.0.1;
+        port = 10800;
+        // ip = $INTERNAL_PROXY_IP;
+        // port = 1080;
+}"
+
+
+HOST="
+Host $TUNNEL_HOSTNAME
+    User $TUNNEL_USER
+    IdentityFile ~/.ssh/rd_rsa.jf"
+
+DIR_SSH="$HOME/.ssh"
+
+
+if [ ! -d $DIR_SSH ]; then
+    echo "create "$DIR_SSH
+    mkdir $DIR_SSH
+fi
+
+if [ ! -f $DIR_SSH/rd_rsa.jf ]; then
+    echo "create "$DIR_SSH/rd_rsa.jf
+    echo -e "$RSA" > $DIR_SSH/rd_rsa.jf
+fi
+chmod 0600 $DIR_SSH/rd_rsa.jf
+
+
+if [ ! -f $DIR_SSH/config ]; then
+    echo "touch $DIR_SSH/config"
+    touch $DIR_SSH/config
+fi
+
+IS_HOST=`grep $TUNNEL_HOSTNAME $DIR_SSH/config`
+if [ -z "$IS_HOST" ]; then
+    echo "config $TUNNEL_HOSTNAME"
+    echo -e "$HOST" >> $DIR_SSH/config
+fi
+
+
+if [ ! -f ipsocks ]; then
+    echo "generate ipsocks"
+    echo -e "$IPSOCKS" > ipsocks
+    sudo chmod a+x ipsocks
+fi
+
+RELEASE=""
+
+if [ -f /etc/lsb-release ]; then
+    RELEASE=`grep DISTRIB_ID /etc/lsb-release |cut -d = -f2`
+fi
+
+echo "The release dist is "$RELEASE
+if [ x$RELEASE == "xUbuntu" ]; then
+    SERVICE=`dpkg -l redsocks | grep redsocks`
+    if [ $? != 0 ]; then
+        echo $SERVICE
+        sudo apt-get install redsocks
+    fi
+    SERVICE=`dpkg -l autossh | grep autossh`
+    if [ $? != 0 ]; then
+        echo $SERVICE
+        sudo apt-get install autossh
+    fi
+fi
+
+IS_PROXY=`grep 10800 /etc/redsocks.conf`
+if [ -z "$IS_PROXY" ]; then
+    echo "config redsocks conf"
+    echo -e "$SOCKS_CONF" |sudo tee -a /etc/redsocks.conf
+fi
+
+sudo ./ipsocks
+sudo iptables -t nat -L REDSOCKS
+
+
+sudo service redsocks restart
+# ssh -N -L 127.0.0.1:10800:TUNNEL_HOSTNAME:1080 $TUNNEL_HOSTNAME -vvv
+
+PID=`ps -ef |grep autossh.*$TUNNEL_HOSTNAME |grep -v grep |awk '{print $2}'`
+echo "kill the process $PID"
+sudo kill -9 $PID
+
+autossh -f -M 20000 -N -L 127.0.0.1:10800:TUNNEL_HOSTNAME:1080 $TUNNEL_HOSTNAME

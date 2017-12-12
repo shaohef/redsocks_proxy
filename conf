@@ -1,0 +1,13 @@
+BASIC_PROXY="proxy.xxx.xxxx:911"
+
+RSA='-----BEGIN RSA PRIVATE KEY-----
+YOURPRIVATE....
+-----END RSA PRIVATE KEY-----'
+
+INTERNAL_PROXY_IP="xxx.com"
+
+TUNNEL_HOSTNAME="xxxxx.com"
+
+TUNNEL_USER="user"
+
+TUNNEL_PROXY="proxy.xxx.com"
