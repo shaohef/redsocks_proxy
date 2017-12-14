@@ -128,17 +128,50 @@ if [ x$RELEASE == "xUbuntu" ]; then
     fi
 fi
 
-IS_PROXY=`grep 10800 /etc/redsocks.conf`
-if [ -z "$IS_PROXY" ]; then
-    echo "config redsocks conf"
-    echo -e "$SOCKS_CONF" |sudo tee -a /etc/redsocks.conf
+CentOS_RELEASE=`cat /etc/redhat-release  |cut -d " "  -f1`
+
+if [ x$CentOS_RELEASE == "xCentOS" ]; then
+    echo "The release dist is "$CentOS_RELEASE
+    if [ ! -f "redsocks" ]; then
+        git clone http://github.com/darkk/redsocks.git
+    fi
+    cd redsocks
+    make
+    cd -
+    SERVICE=`yum list autossh | grep autossh |cut -d " "  -f1`
+    if [ $? != 0 ]; then
+        echo $SERVICE
+        sudo yum install autossh
+    fi
+fi
+
+if [ x$RELEASE == "xUbuntu" ]; then
+    IS_PROXY=`grep 10800 /etc/redsocks.conf`
+    if [ -z "$IS_PROXY" ]; then
+        echo "config redsocks conf"
+        echo -e "$SOCKS_CONF" |sudo tee -a /etc/redsocks.conf
+    fi
 fi
 
 sudo ./ipsocks
 sudo iptables -t nat -L REDSOCKS
 
+# settings for docker
+sudo sysctl -w net.ipv4.conf.default.route_localnet=1
+sudo sysctl -w net.ipv4.conf.all.route_localnet=1
 
-sudo service redsocks restart
+grep "route_localnet" /etc/sysctl.conf
+if [ $? -ne 0 ]; then
+    sudo tee -a /etc/sysctl.conf >/dev/null << EOF
+net.ipv4.conf.all.route_localnet = 1
+net.ipv4.conf.default.route_localnet = 1
+EOF
+fi
+
+
+if [ x$RELEASE == "xUbuntu" ]; then
+    sudo service redsocks restart
+fi
 # ssh -N -L 127.0.0.1:10800:TUNNEL_HOSTNAME:1080 $TUNNEL_HOSTNAME -vvv
 
 PID=`ps -ef |grep autossh.*$TUNNEL_HOSTNAME |grep -v grep |awk '{print $2}'`
